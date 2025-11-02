@@ -1,0 +1,19 @@
+[package]
+  cjc-version = "1.0.3"
+  name = "cjcj"
+  description = "nothing here"
+  version = "1.0.0"
+  target-dir = ""
+  src-dir = ""
+  output-type = "executable"
+  compile-option = ""
+  override-compile-option = ""
+  link-option = ""
+  [package.package-configuration]
+
+[dependencies]
+
+[target]
+  [target.local]
+    [target.local.bin-dependencies]
+      path-option = [ "D:/CangJie/bin", "D:/CangJie/tools/bin" ]
