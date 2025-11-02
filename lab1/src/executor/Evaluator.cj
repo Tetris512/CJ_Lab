@@ -43,12 +43,129 @@ public open class Evaluator <: Visitor<Value> {
                     case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.ADD_TYPE_MISMATCH,
                         "cannot add left = ${left}, right = ${right}", expr)
                 }
+                case TokenKind.SUB => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) => Value.from(a - b)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.SUB_TYPE_MISMATCH,
+                        "cannot subtract left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.MUL => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) => Value.from(a * b)
+                    case (VString(a), VInteger(b)) => Value.from(a * b)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.MUL_TYPE_MISMATCH,
+                        "cannot multiply left = ${left}, right = ${right}", expr)
+                }       
+                case TokenKind.DIV => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) =>
+                        if (b == 0) {
+                            throw CjcjRuntimeErrorWithLocation(ErrorCode.DIV_BY_ZERO,
+                                "divide by zero: left = ${left}, right = ${right}", expr)
+                        }
+                        Value.from(a / b)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.DIV_TYPE_MISMATCH,
+                        "cannot divide left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.MOD => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) =>
+                        if (b == 0) {
+                            throw CjcjRuntimeErrorWithLocation(ErrorCode.MOD_BY_ZERO,
+                                "modulo by zero: left = ${left}, right = ${right}", expr)
+                        }
+                        Value.from(a % b)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.MOD_TYPE_MISMATCH,
+                        "cannot modulo left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.EXP => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) =>
+                        if (b < 0) {
+                            throw CjcjRuntimeErrorWithLocation(ErrorCode.EXP_NEGATIVE_POWER,
+                                "negative exponent: left = ${left}, right = ${right}", expr)
+                        }
+                        Value.from(a ** UInt64(b))
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.EXP_TYPE_MISMATCH,
+                        "cannot exponentiate left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.GT => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) => Value.from(a > b)
+                    case (VString(a), VString(b)) => Value.from(a > b)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.CMP_TYPE_MISMATCH,
+                        "cannot compare left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.LT => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) => Value.from(a < b)
+                    case (VString(a), VString(b)) => Value.from(a < b)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.CMP_TYPE_MISMATCH,
+                        "cannot compare left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.GE => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) => Value.from(a >= b)
+                    case (VString(a), VString(b)) => Value.from(a >= b)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.CMP_TYPE_MISMATCH,
+                        "cannot compare left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.LE => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) => Value.from(a <= b)
+                    case (VString(a), VString(b)) => Value.from(a <= b)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.CMP_TYPE_MISMATCH,
+                        "cannot compare left = ${left}, right = ${right}", expr)
+                }   
+                case TokenKind.EQUAL => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) => Value.from(a == b)
+                    case (VString(a), VString(b)) => Value.from(a == b)
+                    case (VBoolean(a), VBoolean(b)) => Value.from(a == b)
+                    case (VUnit, VUnit) => Value.from(true)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.EQ_TYPE_MISMATCH,
+                        "cannot compare left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.NOTEQ => match ((left, right)) {
+                    case (VInteger(a), VInteger(b)) => Value.from(a != b)
+                    case (VString(a), VString(b)) => Value.from(a != b)
+                    case (VBoolean(a), VBoolean(b)) => Value.from(a != b)
+                    case (VUnit, VUnit) => Value.from(false)
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.NEQ_TYPE_MISMATCH,
+                        "cannot compare left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.AND => match ((left, right)) {
+                    // 左边必须是布尔；右边接受任意 Value 并按 "truthiness" 规则转换为布尔
+                    case (VBoolean(a), _) =>
+                        if (!a) {
+                            return Value.from(false)
+                        } else {
+                            match (right) {
+                                case VBoolean(b) => Value.from(b)
+                                case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.AND_TYPE_MISMATCH,
+                                    "cannot AND left = ${left}, right = ${right}", expr)
+                            }
+                        }
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.AND_TYPE_MISMATCH,
+                        "cannot AND left = ${left}, right = ${right}", expr)
+                }
+                case TokenKind.OR => match ((left, right)) {
+                    // 左边必须是布尔；右边接受任意 Value 并按 "truthiness" 规则转换为布尔
+                    case (VBoolean(a), _) =>
+                        if (a) {
+                            return Value.from(true)
+                        } else {
+                            match (right) {
+                                case VBoolean(b) => Value.from(b)
+                                case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.OR_TYPE_MISMATCH,
+                                    "cannot OR left = ${left}, right = ${right}", expr)
+                            }
+                        }
+                    case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.OR_TYPE_MISMATCH,
+                        "cannot OR left = ${left}, right = ${right}", expr)
+                }
                 case _ => throw Lab1TodoException("Unimplemented Binary Operator `${expr.oper.kind}`")
             }
         } catch (e: OverflowException) {
             match (e.message) {
                 case "add" => throw CjcjRuntimeErrorWithLocation(ErrorCode.ADD_OVERFLOW,
                     "overflow add: left = ${left}, right = ${right}", expr)
+                case "sub" => throw CjcjRuntimeErrorWithLocation(ErrorCode.SUB_OVERFLOW,
+                    "overflow sub: left = ${left}, right = ${right}", expr)
+                case "mul" => throw CjcjRuntimeErrorWithLocation(ErrorCode.MUL_OVERFLOW,
+                    "overflow mul: left = ${left}, right = ${right}", expr)
+                case "exp" => throw CjcjRuntimeErrorWithLocation(ErrorCode.EXP_OVERFLOW,
+                    "overflow exp: left = ${left}, right = ${right}", expr)
                 case _ => throw Lab1TodoException("You need to handle overflow of ${e.message}")
             }
         }
