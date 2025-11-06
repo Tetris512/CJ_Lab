@@ -1,5 +1,6 @@
 package cjcj
 
+import cjcj.executor.*
 import cjcj.visitor.Program
 import cjcj.parser.*
 import cjcj.scanner.*
@@ -60,14 +61,22 @@ func printHelp() {
 }
 
 main(args: Array<String>) {
-    if (args.size == 0) {
-        printHelp()
-        exit(0)
-    }
-    match (args[0]) {
-        case "run" => Cj.runCode(getCode(args))
-        case "ast" => Cj.printAst(getCode(args))
-        case _ => printHelp()
+    try {
+        if (args.size == 0) {
+            printHelp()
+            exit(0)
+        }
+        match (args[0]) {
+            case "run" => Cj.runCode(getCode(args))
+            case "ast" => Cj.printAst(getCode(args))
+            case _ => printHelp()
+        }
+    } catch (e: CjcjRuntimeErrorWithLocation) {
+        eprintln(e.toString())
+        exit(1)
+    } catch (e: Exception) {
+        eprintln(e.toString())
+        exit(1)
     }
 }
 

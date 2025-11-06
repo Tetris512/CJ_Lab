@@ -7,6 +7,7 @@ import std.deriving.Derive
 public enum ErrorCode {
     | ADD_TYPE_MISMATCH // 加法两侧类型不受支持。
     | ADD_OVERFLOW // 整数加法结果超出 `Int64` 表示范围。
+    | INTEGER_LITERAL_OVERFLOW // 整数字面量超出 Int64 表示范围或无法转换。
     | SUB_TYPE_MISMATCH // 减法两侧类型不受支持。
     | SUB_OVERFLOW // 整数减法结果超出 `Int64` 表示范围。
     | MUL_TYPE_MISMATCH // 乘法两侧类型不受支持。

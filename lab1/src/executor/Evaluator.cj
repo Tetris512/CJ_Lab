@@ -4,12 +4,17 @@ import cjcj.visitor.*
 import cjcj.scanner.TokenKind
 import cjcj.scanner.Token
 import std.convert.*
+import std.collection.ArrayList
 
 class Lab1TodoException <: Exception {
     public init(message: String) {
         super("Lab 1 TODO: " + message)
     }
 }
+
+private class BreakSignal <: Exception {}
+
+private class ContinueSignal <: Exception {}
 
 /** 
  * Evaluator Visitor
@@ -22,11 +27,19 @@ class Lab1TodoException <: Exception {
 public open class Evaluator <: Visitor<Value> {
     // How do you get and set the context when executing an expression?
     // You might need to add some member variables to do this.
-    //
-    // private let context = ...
-    // private let static_scope = ...
+    // 当前的静态作用域
+    private var context = Environment<String, Binding>()  
+    // 全部的静态作用域
+    private var static_scope = ArrayList<Environment<String, Binding>>()
+    // 当前所处循环的层数，处理 break / continue 的合法性
+    private var loopDepth: Int64 = 0
+
+    public init() {
+        static_scope.add(context)
+    }
 
     public open override func visit(_: Program): Value {
+        
         throw UnsupportedException("Unimplemented method for Visitor : Program")
     }
 
@@ -35,6 +48,7 @@ public open class Evaluator <: Visitor<Value> {
     public open override func visit(expr: BinaryExpr): Value {
         let left = expr.left.traverse(this)
         let right = expr.right.traverse(this)
+
         try {
             match (expr.oper.kind) {
                 case TokenKind.ADD => match ((left, right)) {
@@ -172,26 +186,165 @@ public open class Evaluator <: Visitor<Value> {
     }
 
     public open override func visit(expr: UnaryExpr): Value {
+        let value = expr.right.traverse(this)   
+
+        try {
+            match (expr.oper.kind) {
+                case TokenKind.SUB => 
+                    match (value) {
+                        case VInteger(a) => return Value.from(-a)
+                        case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.NEG_TYPE_MISMATCH,
+                            "cannot negate value = ${value}", expr)
+                    }
+                case TokenKind.NOT => 
+                    match (value) {
+                        case VBoolean(a) => return Value.from(!a)
+                        case _ => throw CjcjRuntimeErrorWithLocation(ErrorCode.NOT_TYPE_MISMATCH,
+                            "cannot NOT value = ${value}", expr)
+                    }
+                case _ => throw Lab1TodoException("Unimplemented Unary Operator `${expr.oper.kind}`")
+            }
+        } catch (e: OverflowException) {
+            match (e.message) {
+                case "neg" => throw CjcjRuntimeErrorWithLocation(ErrorCode.NEG_OVERFLOW,
+                    "overflow negation: value = ${value}", expr)
+                case _ => throw Lab1TodoException("You need to handle overflow of ${e.message}")
+            }
+        }
+
         throw Lab1TodoException("Unary Expression Evaluation Not Implemented")
     }
 
     public open override func visit(par: ParenExpr): Value {
+        return par.parenthesizedExpr.traverse(this)
+
         throw Lab1TodoException("Parenthesized Expression Evaluation Not Implemented")
     }
 
     public open override func visit(lit: LitConstExpr): Value {
         match (lit.literal.kind) {
-            case TokenKind.INTEGER_LITERAL => Value.from(Int64.parse(lit.literal.value))
+            case TokenKind.INTEGER_LITERAL =>
+                try {
+                    Value.from(Int64.parse(lit.literal.value))
+                } catch (e: IllegalArgumentException) {
+                    // integer literal too large or cannot be parsed as Int64
+                    throw CjcjRuntimeErrorWithLocation(ErrorCode.INTEGER_LITERAL_OVERFLOW,
+                        "integer literal out of range or invalid: ${lit.literal.value}", lit)
+                }
+            case TokenKind.STRING_LITERAL => Value.from(lit.literal.value)
+            case TokenKind.BOOL_LITERAL => Value.from(Bool.parse(lit.literal.value))      
+            case TokenKind.UNIT_LITERAL => Value.VUnit
             case _ => throw Lab1TodoException("There are more literal types to implement")
         }
     }
 
     public open override func visit(expr: AssignExpr): Value {
-        throw Lab1TodoException("Assignment Expression Evaluation Not Implemented")
+        let value = expr.right.traverse(this)
+        // 试图读取未初始化的变量
+        if (isUnit(value)) {
+            throw CjcjRuntimeErrorWithLocation(ErrorCode.UNDEFINED_VAR,
+                "try to visit unassigned variable", expr)
+        }
+
+        if (let Some(refExpr) <- (expr.left as RefExpr)) {
+            let name = refExpr.identifier.value
+
+            match (context.getGlobal(name)) {
+                case None =>
+                    throw CjcjRuntimeErrorWithLocation(ErrorCode.UNDEFINED_VAR,
+                        "assign to undefined variable `${name}`", expr)
+                case Some(binding) =>
+                    match (binding) {
+                        case Binding.VAR_Initialized(previous) =>
+                            if (!isSameValueType(previous, value)) {
+                                throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                    "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                            } else {
+                                setValueInContext(name, Binding.VAR_Initialized(value))
+                            }
+                        case Binding.VAR_Uninitialized(previous) =>
+                        //查看是否定义类型
+                            match (previous) {
+                                case VInteger(_) =>
+                                    if (!isSameValueType(Value.VInteger(0), value)) {
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                            "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                                    }
+                                case VString(_) =>
+                                    if (!isSameValueType(Value.VString(""), value)) {
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                            "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                                    }
+                                case VBoolean(_) =>
+                                    if (!isSameValueType(Value.VBoolean(false), value)) {
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                            "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                                    }
+                                case VUnit =>
+                                    if (!isSameValueType(Value.VUnit, value)) {
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                            "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                                    }
+                            }
+                            setValueInContext(name, Binding.VAR_Initialized(value))
+                        case Binding.LET_Initialized(Value) =>
+                            throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSGIN_IMMUT_VAR,
+                                "cannot assign to constant variable `${name}`", expr)
+                        case Binding.LET_Uninitialized(previous) =>
+                        // 查看是否定义类型
+                            match (previous) {
+                                case VInteger(_) =>
+                                    if (!isSameValueType(Value.VInteger(0), value)) {
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                            "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                                    }
+                                case VString(_) =>
+                                    if (!isSameValueType(Value.VString(""), value)) {
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                            "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                                    }
+                                case VBoolean(_) =>
+                                    if (!isSameValueType(Value.VBoolean(false), value)) {
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                            "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                                    }
+                                case VUnit =>
+                                    if (!isSameValueType(Value.VUnit, value)) {
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+                                            "type mismatch: cannot assign ${value.toValueString()} to `${name}`", expr)
+                                    }
+                            }
+                            setValueInContext(name, Binding.LET_Initialized(value))
+                    }
+    
+                return Value.VUnit
+            }
+        }
+        throw CjcjRuntimeErrorWithLocation(ErrorCode.ASSIGN_TYPE_MISMATCH,
+            "left-hand side of assignment must be a variable reference",expr)
     }
 
     public open override func visit(ref: RefExpr): Value {
-        throw Lab1TodoException("Reference Expression Evaluation Not Implemented")
+        let name = ref.identifier.value
+        match (context.getGlobal(name)) {
+            case None =>
+                throw CjcjRuntimeErrorWithLocation(ErrorCode.UNDEFINED_VAR,
+                    "try to visit undefined variable `${name}`", ref)
+            case Some(binding) =>
+                match (binding) {
+                    // 这里逻辑比较难理解，到这步的已经是访问值的情况了
+                    case Binding.VAR_Uninitialized(value) =>
+                        throw CjcjRuntimeErrorWithLocation(ErrorCode.UNINITIALIZED_VAR,
+                            "try to read uninitialized variable `${name}`", ref)
+                    case Binding.LET_Uninitialized(value) =>
+                        throw CjcjRuntimeErrorWithLocation(ErrorCode.UNINITIALIZED_VAR,
+                            "try to read uninitialized constant variable `${name}`", ref)
+                    case Binding.VAR_Initialized(value) =>
+                        return value
+                    case Binding.LET_Initialized(value) =>
+                        return value
+                }
+        }
     }
 
     public open override func visit(block: Block): Value {
@@ -203,11 +356,113 @@ public open class Evaluator <: Visitor<Value> {
     }
 
     public open override func visit(expr: IfExpr): Value {
-        throw Lab1TodoException("If Expression Evaluation Not Implemented")
+        let cond = expr.condition.traverse(this)
+
+        if (isDefaultElseBranch(expr.elseBranch)) {
+            match (cond) {
+                case VBoolean(b) =>
+                    if (b) {
+                        var new_scope = Environment<String, Binding>(Some(context))
+                        static_scope.add(new_scope)
+                        context = new_scope
+                        expr.ifBlock.traverse(this)
+                        // 恢复上下文
+                        if (let Some(enclosing) <- new_scope.enclosing) {
+                            context = enclosing
+                        }
+                    }
+                    return Value.VUnit
+                case _ =>
+                    throw CjcjRuntimeErrorWithLocation(ErrorCode.IF_TYPE_MISMATCH,
+                        "if condition must be boolean, got ${cond.toValueString()}", expr)
+            }
+        }
+        else {
+            match (cond) {
+                case VBoolean(b) =>
+                    if (b) {
+                        var new_scope = Environment<String, Binding>(Some(context))
+                        static_scope.add(new_scope)
+                        context = new_scope
+                        let result = expr.ifBlock.traverse(this)
+                        // 恢复上下文
+                        if (let Some(enclosing) <- new_scope.enclosing) {
+                            context = enclosing
+                        }
+                        return result
+                    }
+                    else {
+                        var new_scope = Environment<String, Binding>(Some(context))
+                        static_scope.add(new_scope)
+                        context = new_scope
+                        let result = expr.elseBranch.traverse(this)
+                        // 恢复上下文
+                        if (let Some(enclosing) <- new_scope.enclosing) {
+                            context = enclosing
+                        }
+                        return result
+                    }
+                case _ =>
+                    throw CjcjRuntimeErrorWithLocation(ErrorCode.IF_TYPE_MISMATCH,
+                        "if condition must be boolean, got ${cond.toValueString()}", expr)
+            }
+        }
     }
 
     public open override func visit(expr: WhileExpr): Value {
-        throw Lab1TodoException("While Expression Evaluation Not Implemented")
+        var cond = expr.condition.traverse(this)
+
+        match (cond) {
+            case VBoolean(b) =>
+                loopDepth += 1
+                var check = b
+                while (check) {
+                    // 新建作用域
+                    var new_scope = Environment<String, Binding>(Some(context))
+                    static_scope.add(new_scope)
+                    context = new_scope
+                    var breaking = false
+                    try {
+                        expr.block.traverse(this)
+                    } catch (_: BreakSignal) {
+                        breaking = true
+                    } catch (_: ContinueSignal) {
+                        // continue to next iteration
+                    } catch (e: Exception) {
+                        if (let Some(enclosing) <- new_scope.enclosing) {
+                            context = enclosing
+                        }
+                        loopDepth -= 1
+                        throw e
+                    }
+                    // 恢复上下文
+                    if (let Some(enclosing) <- new_scope.enclosing) {
+                        context = enclosing
+                    }
+
+                    if (breaking) {
+                        loopDepth -= 1
+                        return Value.VUnit
+                    }
+
+                    cond = expr.condition.traverse(this)
+
+                    match (cond) {
+                        case VBoolean(nCheck) => check = nCheck
+                        case _ =>
+                            loopDepth -= 1
+                            throw CjcjRuntimeErrorWithLocation(ErrorCode.WHILE_TYPE_MISMATCH,
+                                "while condition must be boolean, got ${cond.toValueString()}", expr)
+                    }
+                }
+                loopDepth -= 1
+                return Value.VUnit
+            case _ =>
+                throw CjcjRuntimeErrorWithLocation(ErrorCode.WHILE_TYPE_MISMATCH,
+                    "while condition must be boolean, got ${cond.toValueString()}", expr)
+        }
+
+        return Value.VUnit
     }
 
     public open override func visit(call: CallExpr): Value {
@@ -219,12 +474,132 @@ public open class Evaluator <: Visitor<Value> {
     }
 
     public open override func visit(jmp: JumpExpr): Value {
+        let kind = jmp.keyword.kind
+        match (kind) {
+            case TokenKind.BREAK =>
+                if (loopDepth == 0) {
+                    throw CjcjRuntimeErrorWithLocation(ErrorCode.BREAK_OUTSIDE_LOOP,
+                        "break statement not within a loop", jmp)
+                }
+                throw BreakSignal()
+            case TokenKind.CONTINUE =>
+                if (loopDepth == 0) {
+                    throw CjcjRuntimeErrorWithLocation(ErrorCode.CONTINUE_OUTSIDE_LOOP,
+                        "continue statement not within a loop", jmp)
+                }
+                throw ContinueSignal()
+            case _ =>
+                throw Lab1TodoException("UnSupported jump kind `${kind}`")
+        }
+
         throw Lab1TodoException("Jump Expression Evaluation Not Implemented")
     }
 
     public open override func visit(decl: VarDecl): Value {
+        // decl.keyword_.kind  //VAR or LET    
+        // decl.identifier_.kind   //IDENTIFIER always
+        // decl.declType   //TypeNode or None
+        // decl.initializer    //Expr or None
+
+        let name = decl.identifier.value
+        let isLet = (decl.keyword.kind == TokenKind.LET)
+
+        match (decl.initializer) {
+            // 有初始值：计算右值并直接初始化
+            case Some(initExpr) =>
+                let v = initExpr.traverse(this)
+                if (isLet) {
+                    // let 带初始值
+                    // 重复定义
+                    if (context.getLocal(name).isSome()) {
+                        throw CjcjRuntimeErrorWithLocation(ErrorCode.DUPLICATED_DEF,
+                            "redeclared variable `${name}`", decl)
+                    }
+                    else {
+                        match (decl.declType) {
+                            case Some(typeNode) =>
+                                // 有类型标注，检查类型是否匹配
+                                if (!isSameTypeAnnotationAndValue(typeNode, v)) {
+                                    throw CjcjRuntimeErrorWithLocation(ErrorCode.DEF_TYPE_MISMATCH,
+                                        "type annotation does not match initializer for `${name}`", decl)
+                                }
+                                context.declare(name, Binding.LET_Initialized(v))
+                            case None =>
+                                // 无类型标注，直接初始化
+                                context.declare(name, Binding.LET_Initialized(v))
+                            }
+                        }   
+                } else {
+                    // var 带初始值
+                    // 重复定义
+                    if (context.getLocal(name).isSome()) {
+                        throw CjcjRuntimeErrorWithLocation(ErrorCode.DUPLICATED_DEF,
+                            "redeclared variable `${name}`", decl)
+                    }
+                    else {
+                        match (decl.declType) {
+                            case Some(typeNode) =>
+                                // 有类型标注，检查类型是否匹配
+                                if (!isSameTypeAnnotationAndValue(typeNode, v)) {
+                                    throw CjcjRuntimeErrorWithLocation(ErrorCode.DEF_TYPE_MISMATCH,
+                                        "type annotation does not match initializer for `${name}`", decl)
+                                }
+                                context.declare(name, Binding.VAR_Initialized(v))
+                            case None =>
+                                // 无类型标注，直接初始化
+                                context.declare(name, Binding.VAR_Initialized(v))
+                        }
+                    }
+                }
+            // 无初始值：根据关键字与类型标注处理
+            case None =>
+                if (isLet) {
+                    if (context.getLocal(name).isSome()) {
+                        throw CjcjRuntimeErrorWithLocation(ErrorCode.DUPLICATED_DEF,
+                            "redeclared variable `${name}`", decl)
+                    } else {
+                        match (decl.declType) {
+                            case Some(typeNode) =>
+                                match (getAnnotatedTypeName(typeNode)) {
+                                    case "Int64" => context.declare(name, Binding.LET_Uninitialized(Value.VInteger(0)))
+                                    case "String" => context.declare(name, Binding.LET_Uninitialized(Value.VString("")))
+                                    case "Bool" => context.declare(name, Binding.LET_Uninitialized(Value.VBoolean(false)))
+                                    case "Unit" => context.declare(name, Binding.LET_Uninitialized(Value.VUnit))
+                                    case _ =>
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.DEF_TYPE_MISMATCH,
+                                            "unsupported type annotation for uninitialized constant `${name}`", decl)
+                                }
+                            case None =>
+                                context.declare(name, Binding.LET_Uninitialized(Value.VUnit))
+                        }
+                    }
+                } else {
+                    if (context.getLocal(name).isSome()) {
+                        throw CjcjRuntimeErrorWithLocation(ErrorCode.DUPLICATED_DEF,
+                            "redeclared variable `${name}`", decl)
+                    } else {
+                        match (decl.declType) {
+                            case Some(typeNode) =>
+                                match (getAnnotatedTypeName(typeNode)) {
+                                    // Uninitialized variable 默认值设为对应类型的“零值”
+                                    case "Int64" => context.declare(name, Binding.VAR_Uninitialized(Value.VInteger(0)))
+                                    case "String" => context.declare(name, Binding.VAR_Uninitialized(Value.VString("")))
+                                    case "Bool" => context.declare(name, Binding.VAR_Uninitialized(Value.VBoolean(false)))
+                                    case "Unit" => context.declare(name, Binding.VAR_Uninitialized(Value.VUnit))
+                                    case _ =>
+                                        throw CjcjRuntimeErrorWithLocation(ErrorCode.DEF_TYPE_MISMATCH,
+                                            "unsupported type annotation for uninitialized constant `${name}`", decl)
+                                }
+                            case None =>
+                                context.declare(name, Binding.VAR_Uninitialized(Value.VUnit))
+                        }
+                    }
+                }
+        }
+        return Value.VUnit
         throw Lab1TodoException("Variable Declaration Evaluation Not Implemented")
     }
+
 
     public open override func visit(_: FuncParam): Value {
         throw UnsupportedException("Unimplemented method for Visitor : Function Paramters")
@@ -332,5 +707,103 @@ public open class Evaluator <: Visitor<Value> {
 
     public open override func visit(_: InterfaceReference): Value {
         throw UnsupportedException("Unimplemented method for Visitor : Interface Reference")
+    }
+
+    private func isDefaultElseBranch(branch: Expr): Bool {
+        if (let Some(block) <- (branch as Block)) {
+            let blockNodes = block.nodes
+            if (blockNodes.size == 1) {
+                let firstNode = blockNodes[0]
+                if (let Some(literal) <- (firstNode as LitConstExpr)) {
+                    return literal.literal.kind == TokenKind.UNIT_LITERAL
+                }
+            }
+        }
+        false
+    }
+
+    private func isSameValueType(lhs: Value, rhs: Value): Bool {
+        match ((lhs, rhs)) {
+            case (VInteger(_), VInteger(_)) => true
+            case (VString(_), VString(_)) => true
+            case (VBoolean(_), VBoolean(_)) => true
+            case (VUnit, VUnit) => true
+            case _ => false
+        }
+    }
+
+    private func isUnit(value: Value): Bool {
+        match (value) {
+            case VUnit => true
+            case _ => false
+        }
+    }
+
+    private func setValueInContext(name: String, binding: Binding): Bool {
+        var env = context
+        while (true) {
+            if (env.elements.contains(name)) {
+                env.elements.remove(name)
+                env.elements.add(name, binding)
+                return true
+            }
+            env = match (env.enclosing) {
+                case None => return false
+                case Some(e) => e
+            }
+        }
+        false
+    }
+
+    private func isSameTypeAnnotationAndValue(typeNode: TypeNode, value: Value): Bool {
+        // 原生类型：Bool、Unit、各数值类型(Int8/16/32/64/…)
+        if (let Some(p) <- (typeNode as PrimitiveType)) {
+            let tk = p.typeName.kind
+            match (value) {
+                // 本运行时只有 VInteger(Int64)，把所有“数值型”都视为可接受
+                case VInteger(_) =>
+                    tk == TokenKind.INT64
+                case VBoolean(_) =>
+                    tk == TokenKind.BOOLEAN
+                case VUnit =>
+                    tk == TokenKind.UNIT
+                case VString(_) =>
+                    false
+            }
+        // 引用类型：这里处理 String
+        } else if (let Some(r) <- (typeNode as RefType)) {
+            let tn = r.typeName.value
+            match (value) {
+                case VString(_) => tn == "String"
+                case _ => false
+            }
+        } else {
+            false
+        }
+    }
+    
+    private func getAnnotatedTypeName(typeNode: TypeNode): String {
+        // 原生类型：Bool、Unit、各数值类型(Int8/16/32/64/…)
+        if (let Some(p) <- (typeNode as PrimitiveType)) {
+            let tk = p.typeName.kind
+            match (tk) {
+                case TokenKind.INT8 => "Int8"
+                case TokenKind.INT16 => "Int16"
+                case TokenKind.INT32 => "Int32"
+                case TokenKind.INT64 => "Int64"
+                case TokenKind.BOOLEAN => "Bool"
+                case TokenKind.UNIT => "Unit"
+                case _ => "UnknownPrimitiveType"
+            }
+        // 引用类型：这里处理 String
+        } else if (let Some(r) <- (typeNode as RefType)) {
+            let tn = r.typeName.value
+            match (tn) {
+                case "String" => "String"
+                case _ => "UnknownRefType"
+            }
+        } else {
+            "UnknownType"
+        }
     }
 }
