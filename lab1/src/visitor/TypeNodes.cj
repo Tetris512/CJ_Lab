@@ -35,8 +35,8 @@ public open class TypeNode <: Node {
     }
 
     public open override func yamlPrint(printer: YamlPrinter): Unit {
-        printer.print("typeParameterName", typeParameterName.value)
-        printer.print("typeName", typeName.value)
+        printer.print("typeParameterName", typeParameterName)
+        printer.print("typeName", typeName)
     }
 
     public mut prop typeParameterName: Token {
@@ -157,5 +157,4 @@ public class FuncType <: TypeNode {
         printer.printList("paramTypes", paramTypes_)
         printer.printObject("returnType", returnType_)
     }
-
 }
