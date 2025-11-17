@@ -223,14 +223,7 @@ public open class Evaluator <: Visitor<Value> {
 
     public open override func visit(lit: LitConstExpr): Value {
         match (lit.literal.kind) {
-            case TokenKind.INTEGER_LITERAL =>
-                try {
-                    Value.from(Int64.parse(lit.literal.value))
-                } catch (e: IllegalArgumentException) {
-                    // integer literal too large or cannot be parsed as Int64
-                    throw CjcjRuntimeErrorWithLocation(ErrorCode.INTEGER_LITERAL_OVERFLOW,
-                        "integer literal out of range or invalid: ${lit.literal.value}", lit)
-                }
+            case TokenKind.INTEGER_LITERAL => Value.from(Int64.parse(lit.literal.value))
             case TokenKind.STRING_LITERAL => Value.from(lit.literal.value)
             case TokenKind.BOOL_LITERAL => Value.from(Bool.parse(lit.literal.value))      
             case TokenKind.UNIT_LITERAL => Value.VUnit
